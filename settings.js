@@ -1,6 +1,6 @@
 'use strict';
 const $=id=>document.getElementById(id),channel=new BroadcastChannel('cortex-cindy');
-const defaults={mode:'local',executable:'/home/xibalba/Projects/xibalba-cortex/.venv/bin/xibalba-cortex',home:'/home/xibalba/.local/share/xibalba-cortex/cindy',agentId:'',endpoint:'',recording:false,historyCapture:false,historyDatabase:'',archiveFiles:false,captureActivity:false};
+const defaults={mode:'local',executable:'',home:'',agentId:'',endpoint:'',recording:false,historyCapture:false,historyDatabase:'',archiveFiles:false,captureActivity:false};
 const fields=['mode','executable','home','agentId','endpoint','historyDatabase'];
 function message(t){$('message').textContent=t;}
 async function request(path,options){const r=await fetch(path,options);if(!r.ok)throw new Error('Settings could not be saved. Reopen this page and retry.');return r;}

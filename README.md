@@ -4,7 +4,7 @@
 
 **Persistent memory and verifiable capture of the activity Cindy retains.**
 
-**Plugin:** `xibalba-cortex` · **Version:** `0.3.2` · **Minimum Cindy:** `0.1.115` · **Status:** local integration pilot
+**Plugin:** `xibalba-cortex` · **Version:** `0.3.3` · **Minimum Cindy:** `0.1.115` · **Status:** local integration pilot
 
 Cortex for Cindy connects [Cindy](https://github.com/makecindy/cindy) to the [Xibalba Cortex](https://github.com/XibalbaTechSol/xibalba-cortex) memory backend. It provides tools for remembering, recalling, inspecting provenance, and verifying memory history. Optional recording archives saved conversations, tool calls and results, questions, plans, and background-session messages into a dedicated local Cortex profile.
 
@@ -12,7 +12,7 @@ Optional file snapshots preserve supported attachments and task artifact referen
 
 The plugin is an integration with an existing Cortex installation. It does not install the Python backend, replace Cindy's built-in memory system, or expose private model reasoning.
 
-**[Download the installable package](dist/xibalba-cortex-0.3.2.cindy)** · **[Checksums](dist/SHA256SUMS)** · **[Backend installation](https://github.com/XibalbaTechSol/xibalba-cortex#quick-start)** · **[Report an issue](https://github.com/XibalbaTechSol/cortex-cindy/issues)**
+**[Download the installable package](dist/xibalba-cortex-0.3.3.cindy)** · **[Checksums](dist/SHA256SUMS)** · **[Backend installation](https://github.com/XibalbaTechSol/xibalba-cortex#quick-start)** · **[Report an issue](https://github.com/XibalbaTechSol/cortex-cindy/issues)**
 
 ## Contents
 
@@ -67,15 +67,15 @@ The plugin is an integration with an existing Cortex installation. It does not i
 
 The implementation and integration checks have been exercised on Linux. File handling uses POSIX facilities, including `O_NOFOLLOW` and file modes; Windows portability is not established. macOS and other host combinations require their own canary before claiming support.
 
-The shipped source contains development-machine defaults for the Cortex executable and profile. **Set your own absolute paths after installation.** Those defaults are not an installation mechanism or a portable path-discovery service.
+Executable and profile paths start empty. **Set your own absolute paths after installation.** Existing saved settings are preserved; the plugin does not discover or select another user’s profile.
 
 ## Installation
 
-1. Download [`xibalba-cortex-0.3.2.cindy`](dist/xibalba-cortex-0.3.2.cindy). On GitHub's file page, download the raw file rather than saving the rendered page.
+1. Download [`xibalba-cortex-0.3.3.cindy`](dist/xibalba-cortex-0.3.3.cindy). On GitHub's file page, download the raw file rather than saving the rendered page.
 2. Optionally verify it against [`SHA256SUMS`](dist/SHA256SUMS):
 
    ```bash
-   sha256sum xibalba-cortex-0.3.2.cindy
+   sha256sum xibalba-cortex-0.3.3.cindy
    ```
 
 3. Open Cindy's **Plugins** settings and import the `.cindy` file.
@@ -495,6 +495,7 @@ Marketplace distribution requires its own submission/signing/review process and 
 | `0.2.1` | Retained skip/reset diagnostics and backend-independent log access. |
 | `0.3.0` | File snapshots, activity metadata outbox, whitespace-safe fragments and coverage audit. |
 | `0.3.1` | Recognize Cindy's local `dialogue` workspace kind for artifact eligibility. |
+| `0.3.3` | Public-registry preparation: four catalog languages, author attribution, empty installation paths, and cryptographic activity identifiers. |
 | `0.3.2` | Sharper 1254×1254 square Cortex icon, encoded below Cindy's icon size limit. |
 
 ## License

@@ -13,7 +13,8 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
    if(name==='wake')return route.fulfill({json:{state:'awake'}});
    const f=path.join(__dirname,'..',name);return route.fulfill({body:fs.readFileSync(f),contentType:name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html'});
   });
-  await page.goto('https://plugin.test/');await page.waitForFunction(()=>document.getElementById('executable').value.length>0);
+  await page.goto('https://plugin.test/');await page.locator('#token-state').filter({hasText:'No hosted token saved.'}).waitFor({state:'attached'});
+  assert.equal(await page.locator('#executable').inputValue(),'');assert.equal(await page.locator('#home').inputValue(),'');
   await page.addStyleTag({content:`:root{color-scheme:${theme};--text-primary:${theme==='dark'?'#eee':'#111'};--text-secondary:${theme==='dark'?'#ccc':'#555'};--surface:${theme==='dark'?'#222':'#fff'};--border-default:${theme==='dark'?'#777':'#aaa'}}`});
   assert.equal(await page.locator('#recording').isChecked(),false);assert.equal(await page.locator('#hosted').isVisible(),false);
   await page.locator('#mode').selectOption('hosted');await page.locator('#endpoint').fill('https://cortex.example/mcp');await page.locator('#token').fill('test-token-not-a-real-secret');await page.getByRole('button',{name:'Save settings',exact:true}).click();await page.getByRole('status').filter({hasText:'Saved. Recording is paused.'}).waitFor();

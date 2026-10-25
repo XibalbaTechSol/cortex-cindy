@@ -30,7 +30,7 @@ test('hosted errors do not expose server response bodies or replay writes',async
 function harness(recording=true, storage=new Map()){
  let cfg={mode:'local',recording},callback;const sent=[],requests=[],broadcast=[];
  class Channel{constructor(){this.onmessage=null;Channel.instance=this;}postMessage(x){broadcast.push(x);}}
- const ctx=vm.createContext({localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)},setTimeout(){},BroadcastChannel:Channel,fetch:async(url,options)=>{if(options?.method==='PUT')cfg=JSON.parse(options.body);return {ok:true,json:async()=>({...cfg})};},cindy:{onHostMessage(fn){callback=fn;},send(x){sent.push(x);},node:{async request(r){requests.push(r);return {ok:true,result:{content:[]}};}}},console:{warn(){},log(){},error(){}}});
+ const ctx=vm.createContext({crypto:require('node:crypto').webcrypto,localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)},setTimeout(){},BroadcastChannel:Channel,fetch:async(url,options)=>{if(options?.method==='PUT')cfg=JSON.parse(options.body);return {ok:true,json:async()=>({...cfg})};},cindy:{onHostMessage(fn){callback=fn;},send(x){sent.push(x);},node:{async request(r){requests.push(r);return {ok:true,result:{content:[]}};}}},console:{warn(){},log(){},error(){}}});
  vm.runInContext(fs.readFileSync(path.join(__dirname,'../main.js'),'utf8'),ctx);
  let i=0;return {ctx,sent,requests,broadcast,storage,raw:msg=>callback(msg),emit(name,text,sessionId='s'){callback({type:'event',name,hookId:'h'+(++i),data:{sessionId,text}});},async drain(){await vm.runInContext('eventQueue',ctx);},change(next){cfg={...cfg,...next};Channel.instance.onmessage({data:{type:'settings-changed'}});}};
 }
@@ -145,4 +145,15 @@ test('capture controls preserve recording and history settings and expose read-o
  await vm.runInContext("runTool({tool:'cortex_configure_capture',callId:'capture-options',args:{archive_files:true,activity_metadata:true}})",h.ctx);
  const cfg=await vm.runInContext('config()',h.ctx);assert.equal(cfg.archiveFiles,true);assert.equal(cfg.captureActivity,true);assert.equal(cfg.historyCapture,true);assert.equal(cfg.recording,true);
  await vm.runInContext("runTool({tool:'cortex_capture_audit',callId:'audit',args:{}})",h.ctx);assert.equal(h.requests.at(-1).method,'capture/audit');assert.equal(h.sent.at(-1).result.archive_files_enabled,true);
+});
+
+test('activity identifiers use 128-bit secure randomness and fail closed without it',async()=>{
+ const h=harness();h.change({historyCapture:true,captureActivity:true});
+ await vm.runInContext("Math.random=()=>0.5; queueActivity({name:'did-turn-start',data:{sessionId:'s'}})",h.ctx);
+ await vm.runInContext("queueActivity({name:'did-turn-start',data:{sessionId:'s'}})",h.ctx);
+ const ids=Array.from(await vm.runInContext('activityOutbox.map(x=>x.event.id)',h.ctx));
+ assert.ok(ids.every(id=>/^[a-f0-9]{32}$/.test(id)));assert.notEqual(ids[0],ids[1]);
+ await vm.runInContext("crypto=undefined; queueActivity({name:'did-turn-start',data:{sessionId:'s'}})",h.ctx);
+ assert.equal(await vm.runInContext('activityOutbox.length',h.ctx),2);
+ assert.equal(await vm.runInContext('diagnostics.at(-1).reason',h.ctx),'secure_random_unavailable');
 });

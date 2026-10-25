@@ -2,7 +2,7 @@
 const channel=new BroadcastChannel('cortex-cindy');
 const pending=new Map();
 let state={recorded:0,skipped:0,failed:0,lastResult:'Recording has not started.'};
-const defaults={mode:'local',executable:'/home/xibalba/Projects/xibalba-cortex/.venv/bin/xibalba-cortex',home:'/home/xibalba/.local/share/xibalba-cortex/cindy',agentId:'',endpoint:'',recording:false,historyCapture:false,historyDatabase:'',archiveFiles:false,captureActivity:false};
+const defaults={mode:'local',executable:'',home:'',agentId:'',endpoint:'',recording:false,historyCapture:false,historyDatabase:'',archiveFiles:false,captureActivity:false};
 let generation=0, queued=0,historyBusy=false,historyLast=null,historyError=null;
 
 // Keep diagnostics separate from /kv, whose whole-object writes belong to settings.
@@ -52,7 +52,9 @@ async function queueActivity(msg){
   const cfg=await config();if(!cfg.recording||!cfg.historyCapture||!cfg.captureActivity||cfg.mode!=='local')return;
   const d=msg.data||{};if(typeof d.sessionId!=='string')return;
   if(activityOutbox.length>=ACTIVITY_LIMIT){skip('activity_queue_full',msg,{queue_depth:activityOutbox.length,limit:ACTIVITY_LIMIT});return;}
-  const event={id:Date.now().toString(36)+'-'+Math.random().toString(36).slice(2),session_id:d.sessionId.slice(0,160),name:msg.name,timestamp:new Date().toISOString()};
+  if(typeof crypto==='undefined'||typeof crypto.getRandomValues!=='function'){diagnostic('secure_random_unavailable',msg,{},'error',0);return;}
+  const id=Array.from(crypto.getRandomValues(new Uint8Array(16)),byte=>byte.toString(16).padStart(2,'0')).join('');
+  const event={id,session_id:d.sessionId.slice(0,160),name:msg.name,timestamp:new Date().toISOString()};
   for(const [field,key] of [['blockId','block_id'],['requestId','request_id'],['agent','agent'],['model','model'],['endReason','end_reason']])if(typeof d[field]==='string')event[key]=d[field].slice(0,160);
   if(Number.isFinite(d.durationMs))event.duration_ms=d.durationMs;
   activityOutbox.push({destination:activityDestination(cfg),event});saveActivity();

@@ -5,14 +5,14 @@
   "name": "Xibalba Cortex",
   "description": "Cortex memory tools, conversation hooks, and opt-in read-only capture of persisted Cindy session activity.",
   "whenToUse": "Save or recall Cortex memories, inspect provenance and retrieval traces, verify memory chains, or check Cortex recording and connection health.",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "kind": "chip",
   "entry": "main.js",
   "icon": "assets/icon.png",
   "tools": [
     {
       "name": "cortex_status",
-      "description": "Check live Cortex connectivity, store health, and this plugin\u2019s recording status.",
+      "description": "Check live Cortex connectivity, store health, and this plugin’s recording status.",
       "parameters": {
         "type": "object",
         "properties": {},
@@ -73,7 +73,7 @@
     },
     {
       "name": "cortex_verify",
-      "description": "Verify one memory\u2019s local event chain. Does not prove truth or on-chain anchoring.",
+      "description": "Verify one memory’s local event chain. Does not prove truth or on-chain anchoring.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -133,13 +133,13 @@
     },
     {
       "name": "cortex_configure_history",
-      "description": "Enable or pause read-only capture of this local Cindy history database, including persisted tool calls/results and background sessions. Uses Cindy\u2019s dedicated Cortex identity. Requires explicit user request; validates the current session before saving.",
+      "description": "Enable or pause read-only capture of this local Cindy history database, including persisted tool calls/results and background sessions. Uses Cindy’s dedicated Cortex identity. Requires explicit user request; validates the current session before saving.",
       "parameters": {
         "type": "object",
         "properties": {
           "database": {
             "type": "string",
-            "description": "Explicit absolute path to this account\u2019s local Cindy history database."
+            "description": "Explicit absolute path to this account’s local Cindy history database."
           },
           "enabled": {
             "type": "boolean"
@@ -243,5 +243,12 @@
   },
   "setup": {
     "requires": []
+  },
+  "author": "Xibalba Solutions LLC",
+  "locales": {
+    "en": "locales/en.json",
+    "zh-CN": "locales/zh-CN.json",
+    "ja": "locales/ja.json",
+    "ko": "locales/ko.json"
   }
 }
