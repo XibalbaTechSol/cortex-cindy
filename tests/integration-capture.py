@@ -30,6 +30,7 @@ def main():
   restored=json.loads(''.join(v for i,v in sorted(parts)));assert restored['content']['text']==text
   attachment=target.execute('SELECT storage_locator FROM attachments LIMIT 1').fetchone();blob=Path(attachment['storage_locator']);assert blob.read_bytes()==payload
   artifact.unlink();assert blob.read_bytes()==payload
+  missing=run('sync');assert missing['files_this_sweep']['missing']==2;assert run('audit')['files_verified']
   blob.write_bytes(b'corrupt');corrupt=run('audit');assert not corrupt['files_verified'] and corrupt['files']['missing_or_corrupt_blobs']==2;blob.write_bytes(payload)
   readonly_verified=before==hashlib.sha256(db.read_bytes()).hexdigest();assert readonly_verified
   c=sqlite3.connect(db);c.execute('UPDATE messages SET content=? WHERE id=?',(json.dumps({'ok':True,'stdout':'edited'}),'result'));c.commit();c.close()

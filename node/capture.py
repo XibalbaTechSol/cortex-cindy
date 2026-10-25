@@ -3,7 +3,7 @@ from __future__ import annotations
 import collections,hashlib,json,os,sqlite3,sys,time
 from pathlib import Path
 from urllib.parse import quote
-from capture_files import references,snapshot,MAX_FILES
+from capture_files import references,snapshot,MAX_FILES,SnapshotDeferred
 ROLES=('user','assistant','tool_use','tool_result','ask_user','plan_review')
 REQUIRED={'messages':{'id','session_id','role','content','created_at','tool_use_id','rewind_at'},'sessions':{'id','title','working_dir','agent_kind','status','parent_session_id','orca_role','source'}}
 def source_connection(database):
@@ -30,6 +30,10 @@ def revision(record):return hashlib.sha256(serialize(record).encode()).hexdigest
 def fragment(part):return json.dumps({'capture_schema':2,'fragment':part},ensure_ascii=False,separators=(',',':'))
 def checkpoint_schema(state):
     state.executescript('CREATE TABLE IF NOT EXISTS imported(source TEXT,message TEXT,revision TEXT,parts INTEGER,PRIMARY KEY(source,message,revision)); CREATE TABLE IF NOT EXISTS cursors(source TEXT PRIMARY KEY,rowid INTEGER NOT NULL DEFAULT 0,last_error TEXT,last_success REAL); CREATE TABLE IF NOT EXISTS artifact_attempts(source TEXT,message TEXT,reference TEXT,status TEXT,sha256 TEXT,memory_id TEXT,byte_size INTEGER,PRIMARY KEY(source,message,reference));')
+    # Preserve the last successful snapshot independently of later missing/error attempts.
+    state.executescript('CREATE TABLE IF NOT EXISTS artifact_snapshots(source TEXT,message TEXT,reference TEXT,sha256 TEXT,memory_id TEXT,byte_size INTEGER,manifest_json TEXT,PRIMARY KEY(source,message,reference)); CREATE TABLE IF NOT EXISTS artifact_cursors(source TEXT,message TEXT,revision TEXT,next_index INTEGER,PRIMARY KEY(source,message));')
+    state.execute("INSERT OR IGNORE INTO artifact_snapshots(source,message,reference,sha256,memory_id,byte_size) SELECT source,message,reference,sha256,memory_id,byte_size FROM artifact_attempts WHERE status='archived'")
+
 def synchronize(database,home,writer,redactor=lambda x:x,limit=50,deadline=25,archive_files=False,artifact_writer=None):
     source,path=source_connection(database);root=Path(home).resolve(strict=True)
     if root==path or root in path.parents:source.close();raise ValueError('Cindy source history must be outside the Cortex destination profile.')
@@ -37,7 +41,7 @@ def synchronize(database,home,writer,redactor=lambda x:x,limit=50,deadline=25,ar
     state=sqlite3.connect(checkpoint,timeout=5);os.chmod(checkpoint,0o600);checkpoint_schema(state)
     source_id=hashlib.sha256(str(path).encode()).hexdigest();state.execute('INSERT OR IGNORE INTO cursors(source) VALUES (?)',(source_id,));state.commit()
     cursor=state.execute('SELECT rowid FROM cursors WHERE source=?',(source_id,)).fetchone()[0]
-    imported=0;scanned=0;started=time.monotonic();complete=False;files=collections.Counter()
+    imported=0;scanned=0;started=time.monotonic();complete=False;files=collections.Counter();budget_exhausted=False
     try:
         rows=source.execute(rows_query(source)+' AND m.rowid>? ORDER BY m.rowid LIMIT ?',(*ROLES,cursor,limit)).fetchall()
         for row in rows:
@@ -53,14 +57,29 @@ def synchronize(database,home,writer,redactor=lambda x:x,limit=50,deadline=25,ar
             if archive_files and artifact_writer:
                 refs=references(record)
                 if len(refs)>MAX_FILES:files['reference_limit']+=len(refs)-MAX_FILES
-                for reference,kind in refs[:MAX_FILES]:
+                progress=state.execute('SELECT revision,next_index FROM artifact_cursors WHERE source=? AND message=?',(source_id,row['id'])).fetchone()
+                next_index=progress[1] if progress and progress[0]==rev else 0
+                for file_index,(reference,kind) in enumerate(refs[:MAX_FILES]):
+                    if file_index<next_index:continue
+                    state.execute('INSERT OR REPLACE INTO artifact_cursors VALUES (?,?,?,?)',(source_id,row['id'],rev,file_index));state.commit()
+                    previous=state.execute('SELECT manifest_json,memory_id FROM artifact_snapshots WHERE source=? AND message=? AND reference=?',(source_id,row['id'],reference)).fetchone()
+                    cached=(json.loads(previous[0]),{'id':previous[1]}) if previous and previous[0] else None
                     def consume(identity,manifest,temp):
                         return artifact_writer(f'{source_id}:{row["id"]}:file:{identity}',manifest,temp,{'kind':'cindy_file_snapshot','locator':f'cindy://sessions/{row["session_id"]}/messages/{row["id"]}/artifacts/{identity}','session_id':'cindy:'+row['session_id'],'message_id':row['id'],'role':row['role'],'metadata':{'capture_surface':'cindy_file_snapshot','source_database_sha256':source_id,'artifact_status':manifest['status'],'artifact_sha256':manifest.get('sha256')}})
-                    manifest,result=snapshot(reference,kind,record,path,folder,consume)
+                    try:manifest,result=snapshot(reference,kind,record,path,folder,consume,previous=cached,deadline=started+deadline)
+                    except SnapshotDeferred:
+                        budget_exhausted=True;files['deferred']+=len(refs[:MAX_FILES])-file_index;break
                     files[manifest['status']]+=1
-                    state.execute('INSERT OR REPLACE INTO artifact_attempts VALUES (?,?,?,?,?,?,?)',(source_id,row['id'],reference,manifest['status'],manifest.get('sha256'),result.get('id') if isinstance(result,dict) else None,manifest.get('byte_size')));state.commit()
+                    if isinstance(result,dict) and result.get('reused'):files['reused_snapshots']+=1
+                    memory=result.get('id') if isinstance(result,dict) else None
+                    state.execute('INSERT OR REPLACE INTO artifact_attempts VALUES (?,?,?,?,?,?,?)',(source_id,row['id'],reference,manifest['status'],manifest.get('sha256'),memory,manifest.get('byte_size')))
+                    if manifest['status']=='archived':
+                        state.execute('INSERT OR REPLACE INTO artifact_snapshots VALUES (?,?,?,?,?,?,?)',(source_id,row['id'],reference,manifest['sha256'],memory,manifest['byte_size'],json.dumps(manifest)))
+                    state.execute('UPDATE artifact_cursors SET next_index=? WHERE source=? AND message=?',(file_index+1,source_id,row['id']));state.commit()
+                if budget_exhausted:break
+                state.execute('DELETE FROM artifact_cursors WHERE source=? AND message=?',(source_id,row['id']));state.commit()
             cursor=row['source_rowid'];state.execute('UPDATE cursors SET rowid=?,last_error=NULL,last_success=? WHERE source=?',(cursor,time.time(),source_id));state.commit()
-        complete=len(rows)<limit and scanned==len(rows)
+        complete=not budget_exhausted and len(rows)<limit and scanned==len(rows)
         if complete:state.execute('UPDATE cursors SET rowid=0 WHERE source=?',(source_id,));state.commit()
         total=state.execute('SELECT count(*) FROM imported WHERE source=?',(source_id,)).fetchone()[0]
         return {'ok':True,'imported':imported,'scanned':scanned,'imported_revisions':total,'scan_complete':complete,'source_read_only':True,'source_fingerprint':source_id,'files_this_sweep':dict(files),'coverage':{'roles':list(ROLES),'background_sessions':'persisted messages included','artifacts':'explicit attachments and eligible local artifact references snapshotted, 50 MiB per file, with status manifests' if archive_files else 'persisted content and references only','reasoning':'private text excluded; visible plans/progress retained; activity boundary metadata captured separately','source_truncation':'cannot recover content absent from Cindy history','delivery':'idempotent replay; checkpoint after successful writes; rescans catch edits','fragment_format':'json_fragment_v2, whitespace preserved','retention':'Cortex redaction on message envelopes; original attached bytes are not redacted'}}
@@ -89,23 +108,25 @@ def audit(database,home,redactor=lambda x:x,verify_blobs=True):
         if checkpoint.exists():
             state=sqlite3.connect('file:'+quote(str(checkpoint),safe='/')+'?mode=ro',uri=True)
             if state.execute("SELECT 1 FROM sqlite_master WHERE name='artifact_attempts'").fetchone():
-                for message,reference,status,digest,memory,size in state.execute('SELECT message,reference,status,sha256,memory_id,byte_size FROM artifact_attempts WHERE source=?',(source_id,)):
+                for message,reference,status in state.execute('SELECT message,reference,status FROM artifact_attempts WHERE source=?',(source_id,)):
+                    if (message,reference) in current_refs:attempted.add((message,reference));file_counts[status]+=1
+                has_snapshots=state.execute("SELECT 1 FROM sqlite_master WHERE name='artifact_snapshots'").fetchone()
+                query='SELECT message,reference,sha256,memory_id,byte_size FROM artifact_snapshots WHERE source=?' if has_snapshots else "SELECT message,reference,sha256,memory_id,byte_size FROM artifact_attempts WHERE source=? AND status='archived'"
+                for message,reference,digest,memory,size in state.execute(query,(source_id,)):
                     if (message,reference) not in current_refs:continue
-                    attempted.add((message,reference));file_counts[status]+=1
-                    if status=='archived':
-                        attachment=target.execute('SELECT storage_locator,content_hash,byte_size FROM attachments WHERE memory_id=? AND content_hash=?',(memory,'sha256:'+digest)).fetchone()
-                        valid=attachment is not None
-                        if valid and verify_blobs:
-                            try:
-                                blob=Path(attachment['storage_locator']).resolve(strict=True)
-                                if not blob.is_relative_to((root/'blobs').resolve()):valid=False
-                                else:
-                                    h=hashlib.sha256()
-                                    with blob.open('rb') as stream:
-                                        for chunk in iter(lambda:stream.read(1024*1024),b''):h.update(chunk)
-                                    valid=h.hexdigest()==digest and blob.stat().st_size==size
-                            except OSError:valid=False
-                        file_counts['verified_blobs' if valid else 'missing_or_corrupt_blobs']+=1
+                    attachment=target.execute('SELECT storage_locator,content_hash,byte_size FROM attachments WHERE memory_id=? AND content_hash=?',(memory,'sha256:'+digest)).fetchone()
+                    valid=attachment is not None and attachment['byte_size']==size
+                    if valid and verify_blobs:
+                        try:
+                            blob=Path(attachment['storage_locator']).resolve(strict=True)
+                            if not blob.is_relative_to((root/'blobs').resolve()):valid=False
+                            else:
+                                h=hashlib.sha256()
+                                with blob.open('rb') as stream:
+                                    for chunk in iter(lambda:stream.read(1024*1024),b''):h.update(chunk)
+                                valid=h.hexdigest()==digest and blob.stat().st_size==size
+                        except OSError:valid=False
+                    file_counts['verified_blobs' if valid else 'missing_or_corrupt_blobs']+=1
             state.close()
         file_counts['not_attempted']=len(current_refs-attempted)
         return {'ok':True,'checked_at':time.time(),'scope':'snapshot of currently persisted non-deleted supported messages; subsequent activity may still be queued','roles':counts,'missing_sample':failures,'messages_verified':all(x['missing_or_changed']==0 for x in counts.values()),'excluded_role_counts':excluded,'files':dict(file_counts),'files_verified':file_counts.get('verified_blobs',0)==len(current_refs),'private_reasoning':'not imported or inspected; thinking boundaries only','source_read_only':True}

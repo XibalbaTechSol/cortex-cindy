@@ -1,5 +1,5 @@
 """Snapshot explicit attachments and eligible task artifact references; never crawl folders."""
-import hashlib,json,mimetypes,os,re,stat,tempfile
+import errno,hashlib,json,mimetypes,os,re,stat,tempfile,time
 from pathlib import Path
 from urllib.parse import unquote,urlsplit
 MAX_BYTES=50*1024*1024
@@ -47,33 +47,62 @@ def eligible_path(reference,kind,record,database):
     if any(x.is_symlink() for x in (candidate,*candidate.parents)):return None,'symlink_reference'
     if candidate.name in ('.env','id_rsa','id_ed25519','credentials','credentials.json') or candidate.suffix in ('.pem','.key') or any(x in candidate.parts for x in ('.ssh','.aws','safe-storage','safeStorage')):return None,'credential_path'
     return candidate,None
-def snapshot(reference,kind,record,database,folder,consumer,max_bytes=MAX_BYTES):
+class SnapshotDeferred(Exception):
+    """The cooperative sweep budget expired; keep the file checkpoint for resumption."""
+
+def check_budget(deadline):
+    if deadline is not None and time.monotonic() >= deadline:raise SnapshotDeferred()
+
+def open_no_symlinks(candidate):
+    """Resolve every component relative to a held directory FD, never a checked path."""
+    directory_flags=os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW
+    directory=os.open(candidate.anchor,directory_flags)
+    try:
+        for component in candidate.parts[1:-1]:
+            following=os.open(component,directory_flags,dir_fd=directory)
+            os.close(directory);directory=following
+        return os.open(candidate.name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=directory)
+    finally:os.close(directory)
+
+def source_stat(info):
+    return [info.st_dev,info.st_ino,info.st_mode,info.st_size,info.st_mtime_ns,info.st_ctime_ns]
+
+def snapshot(reference,kind,record,database,folder,consumer,max_bytes=MAX_BYTES,previous=None,deadline=None):
+    check_budget(deadline)
     candidate,reason=eligible_path(reference,kind,record,database)
     manifest={'reference':reference,'reference_kind':kind,'status':reason or 'pending','snapshot_semantics':'bytes available at capture time; not proof of original creation bytes'}
     temp=None
     try:
         if candidate:
             try:
-                fd=os.open(candidate,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+                fd=open_no_symlinks(candidate)
                 with os.fdopen(fd,'rb') as src:
                     before=os.fstat(src.fileno())
                     if not stat.S_ISREG(before.st_mode):manifest['status']='not_regular_file'
                     elif before.st_size>max_bytes:manifest.update(status='size_limit',byte_size=before.st_size,max_bytes=max_bytes)
+                    elif previous and previous[0].get('source_stat')==source_stat(before):
+                        # The secure FD walk still runs on every sweep. The existing snapshot
+                        # remains independently hash-verifiable even when its source disappears.
+                        return previous[0],{**previous[1],'reused':True}
                     else:
                         sha=hashlib.sha256();size=0
                         with tempfile.NamedTemporaryFile(dir=folder,prefix='snapshot-',delete=False) as out:
                             temp=Path(out.name);os.chmod(temp,0o600)
-                            while chunk:=src.read(1024*1024):
+                            while True:
+                                check_budget(deadline)
+                                chunk=src.read(1024*1024)
+                                if not chunk:break
                                 size+=len(chunk)
                                 if size>max_bytes:break
                                 sha.update(chunk);out.write(chunk)
                         after=os.fstat(src.fileno())
                         if size>max_bytes:manifest.update(status='size_limit',byte_size=size,max_bytes=max_bytes)
-                        elif (before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)!=(after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns):manifest['status']='changed_during_read'
-                        else:manifest.update(status='archived',byte_size=size,sha256=sha.hexdigest(),media_type=mimetypes.guess_type(str(candidate))[0] or 'application/octet-stream')
+                        elif source_stat(before)!=source_stat(after):manifest['status']='changed_during_read'
+                        else:manifest.update(status='archived',byte_size=size,sha256=sha.hexdigest(),source_stat=source_stat(before),media_type=mimetypes.guess_type(str(candidate))[0] or 'application/octet-stream')
             except FileNotFoundError:manifest['status']='missing'
             except PermissionError:manifest['status']='permission_denied'
-            except OSError:manifest['status']='file_read_failed'
+            except OSError as exc:manifest['status']='symlink_reference' if exc.errno in (errno.ELOOP,errno.ENOTDIR) else 'file_read_failed'
+        check_budget(deadline)
         identity=hashlib.sha256(json.dumps(manifest,sort_keys=True,separators=(',',':')).encode()).hexdigest()
         result=consumer(identity,manifest,temp if manifest['status']=='archived' else None)
         return manifest,result

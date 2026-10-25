@@ -4,7 +4,7 @@
 
 **Persistent memory and verifiable capture of the activity Cindy retains.**
 
-**Plugin:** `xibalba-cortex` · **Version:** `0.3.3` · **Minimum Cindy:** `0.1.115` · **Status:** local integration pilot
+**Plugin:** `xibalba-cortex` · **Version:** `0.3.4` · **Minimum Cindy:** `0.1.115` · **Status:** local integration pilot
 
 Cortex for Cindy connects [Cindy](https://github.com/makecindy/cindy) to the [Xibalba Cortex](https://github.com/XibalbaTechSol/xibalba-cortex) memory backend. It provides tools for remembering, recalling, inspecting provenance, and verifying memory history. Optional recording archives saved conversations, tool calls and results, questions, plans, and background-session messages into a dedicated local Cortex profile.
 
@@ -12,7 +12,7 @@ Optional file snapshots preserve supported attachments and task artifact referen
 
 The plugin is an integration with an existing Cortex installation. It does not install the Python backend, replace Cindy's built-in memory system, or expose private model reasoning.
 
-**[Download the installable package](dist/xibalba-cortex-0.3.3.cindy)** · **[Checksums](dist/SHA256SUMS)** · **[Backend installation](https://github.com/XibalbaTechSol/xibalba-cortex#quick-start)** · **[Report an issue](https://github.com/XibalbaTechSol/cortex-cindy/issues)**
+**[Download the installable package](dist/xibalba-cortex-0.3.4.cindy)** · **[Checksums](dist/SHA256SUMS)** · **[Backend installation](https://github.com/XibalbaTechSol/xibalba-cortex#quick-start)** · **[Report an issue](https://github.com/XibalbaTechSol/cortex-cindy/issues)**
 
 ## Contents
 
@@ -71,11 +71,11 @@ Executable and profile paths start empty. **Set your own absolute paths after in
 
 ## Installation
 
-1. Download [`xibalba-cortex-0.3.3.cindy`](dist/xibalba-cortex-0.3.3.cindy). On GitHub's file page, download the raw file rather than saving the rendered page.
+1. Download [`xibalba-cortex-0.3.4.cindy`](dist/xibalba-cortex-0.3.4.cindy). On GitHub's file page, download the raw file rather than saving the rendered page.
 2. Optionally verify it against [`SHA256SUMS`](dist/SHA256SUMS):
 
    ```bash
-   sha256sum xibalba-cortex-0.3.3.cindy
+   sha256sum xibalba-cortex-0.3.4.cindy
    ```
 
 3. Open Cindy's **Plugins** settings and import the `.cindy` file.
@@ -196,7 +196,7 @@ Hook mode records known skip reasons; it is not a substitute for persisted histo
 
 With recording and history capture enabled, the hook text recorder yields to the SQLite-history connector to avoid recording each message through both routes. The connector imports the six supported saved message roles across the selected account's non-deleted sessions, including saved background-session activity.
 
-Automatic sweeps run after a 15-second interval following the previous polling work. Each sweep handles at most 100 supported source records and checks a soft 25-second budget between records. A full scan takes multiple batches; new capture and edit detection are therefore eventually consistent, not instant or governed by a subsecond SLA.
+Automatic sweeps run after a 15-second interval following the previous polling work. Each sweep handles at most 100 supported source records and checks a soft 25-second budget between records, between files, and between file-copy chunks. Incomplete file work retains a per-message checkpoint and resumes on a later sweep; already completed files are not copied again when their securely opened device/inode/mode/size/mtime/ctime fingerprint is unchanged. The budget is cooperative and cannot interrupt a single blocked OS read or backend call. A full scan takes multiple batches; new capture and edit detection are therefore eventually consistent, not instant or governed by a subsecond SLA.
 
 The source connector is tied to the supported installed SQLite schema. It is not a claim that Cindy provides a stable public database-export API. Host updates need a compatibility check.
 
@@ -232,13 +232,13 @@ The resolver currently excludes names such as `.env`, `id_rsa`, `id_ed25519`, `c
 
 ### Storage and provenance
 
-Each attempted reference produces a manifest with its source relationship and a status. Successful snapshots include SHA-256, size, media type, and an attachment linked to a Cortex memory. Bytes are copied through a private temporary file into Cortex's content-addressed blob store. Identical bytes share blob storage, and a completed replay checks for an existing matching attachment before adding one.
+Each attempted reference produces a manifest with its source relationship and a status. Every path component is opened relative to a held directory descriptor with symlink following disabled, including for explicitly attached files. Successful snapshot records are stored separately from the latest source-availability attempt, so a later missing/error result does not erase the archived hash or memory ID. Successful snapshots include SHA-256, size, media type, and an attachment linked to a Cortex memory. Bytes are copied through a private temporary file into Cortex's content-addressed blob store. Identical bytes share blob storage, and a completed replay checks for an existing matching attachment before adding one.
 
 The snapshot means **bytes available when the recorder read the file**. It does not prove those were the bytes originally created or first attached. Rescans can archive a later version while retaining earlier records.
 
 **Original file bytes are not secret-redacted.** Textual message and manifest envelopes use Cortex's redactor; arbitrary binary/text attachments are preserved as bytes. Their contents are not automatically OCRed, transcribed, summarized, or semantically indexed.
 
-Status values include `archived`, `missing`, `permission_denied`, `size_limit`, `changed_during_read`, `file_read_failed`, `not_regular_file`, `unsupported_reference`, `relative_reference`, `remote_reference`, `outside_artifact_roots`, `symlink_reference`, and `credential_path`. Excess or unattempted references remain visible in coverage reporting. A retained reference alone is not a preserved file copy.
+Status values include `archived`, `missing`, `permission_denied`, `size_limit`, `changed_during_read`, `file_read_failed`, `not_regular_file`, `unsupported_reference`, `relative_reference`, `remote_reference`, `outside_artifact_roots`, `symlink_reference`, and `credential_path`. Excess or unattempted references remain visible in coverage reporting. A retained reference alone is not a preserved file copy. Sweep counters also report `reused_snapshots` and `deferred` file work. The audit can verify an earlier archived blob even while the latest attempt reports that its original source is missing.
 
 ## Thinking and other activity metadata
 
@@ -346,7 +346,7 @@ The source fingerprint is derived from the source database's resolved path; it i
 
 ### Recovery and retention
 
-The checkpoint advances only after successful writes. Stable connector event keys support replay after partial failure. Completed scan passes reset the scan position so edits and late additions are revisited. Checkpoints contain identifiers/hashes/state and file reference metadata, not a raw-text transcript spool.
+The checkpoint advances only after successful writes. Per-message file checkpoints prevent completed attachment work from being repeated when a sweep runs out of time. Stable connector event keys support replay after partial failure. Completed scan passes reset the scan position so edits and late additions are revisited. Checkpoints contain identifiers/hashes/state and file reference metadata, not a raw-text transcript spool.
 
 Upgrading from earlier unwrapped fragments causes supported records to be archived once in schema 2; older archival revisions remain. This can increase memory/revision counts without representing duplicate source messages. Memory count, imported-revision count, message count, and fragment count are not interchangeable.
 
@@ -408,6 +408,12 @@ Kinds such as `reset`, `skip`, `error`, and `lifecycle` describe different event
 | `persistent: false` | Plugin browser storage could not be read/written. In-memory results do not prove restart durability. |
 | Icon update is rejected | The PNG must meet Cindy's size limit; the included 1254×1254 icon is below 512 KiB. |
 
+### Memory write outcomes and concurrent settings
+
+Explicit `cortex_remember` failures distinguish `not_executed`, `executed`, and `unknown`. A timeout, connection loss, malformed reply, server error, or lost worker result after dispatch can hide a completed write. For `unknown`, inspect Cortex before deciding whether another save is needed; the plugin does not replay the write automatically. A confirmed success reports `executed`. These outcomes also survive the worker JSON-RPC error boundary.
+
+The resident plugin serializes all plugin-owned settings writes. Configuration tools merge only their intended fields into current settings after connection validation; a recording pause remains in effect. Settings pages send a versioned save request to that writer. An older page receives a reload instruction instead of overwriting newer settings. A settings-save timeout means confirmation was lost: reload and inspect the current recording state.
+
 ## Updates, pause, and removal
 
 Import a newer `.cindy` package, or ask an authorized agent to install an updated source directory through Cindy Forge. Compatible updates preserve enabled state, settings, and data. Review any additional permissions the host presents.
@@ -443,10 +449,10 @@ From this plugin directory:
 node tests/bridge.test.cjs
 
 # Read-only schema handling, replay, file eligibility, byte fidelity and audit decoding
-python3 -B -m unittest discover -s tests -p 'test_history_capture.py' -v
+python3 -B -m unittest discover -s tests -p 'test*.py' -v
 
 # Match Cindy's require-loaded native worker startup contract
-node tests/worker-startup.test.cjs
+node --test tests/worker-startup.test.cjs tests/worker-outcomes.test.cjs
 
 # Real backend canary: uses disposable history/profile/files, not your active store
 /absolute/path/to/cortex/.venv/bin/python tests/integration-capture.py
@@ -495,6 +501,7 @@ Marketplace distribution requires its own submission/signing/review process and 
 | `0.2.1` | Retained skip/reset diagnostics and backend-independent log access. |
 | `0.3.0` | File snapshots, activity metadata outbox, whitespace-safe fragments and coverage audit. |
 | `0.3.1` | Recognize Cindy's local `dialogue` workspace kind for artifact eligibility. |
+| `0.3.4` | Review fixes: descriptor-based file traversal, explicit write outcomes, serialized/versioned settings, preserved snapshot audits, resumable bounded file work and unchanged-file reuse. |
 | `0.3.3` | Public-registry preparation: four catalog languages, author attribution, empty installation paths, and cryptographic activity identifiers. |
 | `0.3.2` | Sharper 1254×1254 square Cortex icon, encoded below Cindy's icon size limit. |
 

@@ -25,7 +25,7 @@ test('hosted MCP initializes, injects token per request, decodes SSE, and closes
 });
 test('hosted errors do not expose server response bodies or replay writes',async()=>{
  const original=global.fetch;let n=0;global.fetch=async()=>{n++;return new Response('sensitive upstream diagnostic',{status:401});};
- try{await assert.rejects(handle({method:'hosted/call',params:{config:{mode:'hosted',endpoint:'https://example.com/mcp'},name:'memory_remember'},cindy:{secrets:{cortex_token:'vault-only'}}}),e=>e.message.includes('401')&&!e.message.includes('sensitive'));assert.equal(n,1);}finally{global.fetch=original;}
+ try{await assert.rejects(handle({method:'hosted/call',params:{config:{mode:'hosted',endpoint:'https://example.com/mcp'},name:'memory_remember'},cindy:{secrets:{cortex_token:'vault-only'}}}),e=>e.outcome==='not_executed'&&!e.message.includes('sensitive'));assert.equal(n,1);}finally{global.fetch=original;}
 });
 function harness(recording=true, storage=new Map()){
  let cfg={mode:'local',recording},callback;const sent=[],requests=[],broadcast=[];
@@ -156,4 +156,33 @@ test('activity identifiers use 128-bit secure randomness and fail closed without
  await vm.runInContext("crypto=undefined; queueActivity({name:'did-turn-start',data:{sessionId:'s'}})",h.ctx);
  assert.equal(await vm.runInContext('activityOutbox.length',h.ctx),2);
  assert.equal(await vm.runInContext('diagnostics.at(-1).reason',h.ctx),'secure_random_unavailable');
+});
+
+test('a connection check cannot restore recording after a concurrent pause',async()=>{
+ const h=harness();await vm.runInContext('cindy.node.request=()=>new Promise(resolve=>globalThis.releaseHealth=resolve)',h.ctx);
+ const pending=vm.runInContext("runTool({tool:'cortex_configure_local',callId:'race',args:{executable:'/opt/cortex',home:'/profiles/new'}})",h.ctx);
+ await new Promise(setImmediate);h.change({recording:false});h.ctx.releaseHealth({ok:true,result:{content:[]}});await pending;
+ const saved=await vm.runInContext('config()',h.ctx);assert.equal(saved.recording,false);assert.equal(saved.home,'/profiles/new');
+});
+test('history validation cannot reenable capture after a concurrent recording pause',async()=>{
+ const h=harness();await vm.runInContext('cindy.node.request=()=>new Promise(resolve=>globalThis.releaseValidation=resolve)',h.ctx);
+ const pending=vm.runInContext("runTool({tool:'cortex_configure_history',callId:'race',args:{database:'/cindy.db',enabled:true,session_id:'s'}})",h.ctx);
+ await new Promise(setImmediate);h.change({recording:false});h.ctx.releaseValidation({ok:true,result:{ok:true}});await pending;
+ const saved=await vm.runInContext('config()',h.ctx);assert.equal(saved.recording,false);assert.equal(saved.historyCapture,false);assert.equal(h.sent.at(-1).ok,false);
+});
+test('a failed remember after dispatch reports unknown outcome without unsafe retry advice',async()=>{
+ const original=global.fetch;let calls=0;global.fetch=async(url,opts)=>{const payload=JSON.parse(opts.body);calls++;
+ if(payload.method==='initialize')return new Response(JSON.stringify({id:1,result:{protocolVersion:'2024-11-05'}}));
+ if(payload.method==='notifications/initialized')return new Response(null,{status:202});return new Response('private server failure',{status:500});};
+ try{await assert.rejects(handle({method:'hosted/call',params:{config:{mode:'hosted',endpoint:'https://example.test/mcp'},name:'memory_remember',args:{content:'canary'}},cindy:{secrets:{cortex_token:'vault-only'}}}),e=>e.outcome==='unknown'&&/check Cortex/i.test(e.message)&&!/then retry/i.test(e.message)&&!e.message.includes('private'));assert.equal(calls,3);}finally{global.fetch=original;}
+});
+
+test('remember tool reports unknown worker failures and known pre-dispatch failures',async()=>{
+ const h=harness();await vm.runInContext("cindy.node.request=async()=>{throw new Error('worker timed out; then retry');}",h.ctx);
+ await vm.runInContext("runTool({tool:'cortex_remember',callId:'unknown',args:{content:'canary',locator:'test'}})",h.ctx);
+ assert.equal(h.sent.at(-1).outcome,'unknown');assert.equal(h.sent.at(-1).errorCode,'CORTEX_WRITE_UNKNOWN');assert.match(h.sent.at(-1).message,/Check Cortex/);assert.doesNotMatch(h.sent.at(-1).message,/then retry/);
+ await vm.runInContext("cindy.node.request=async()=>({ok:false,message:'[CORTEX_WRITE_NOT_EXECUTED] rejected before dispatch'});",h.ctx);
+ await vm.runInContext("runTool({tool:'cortex_remember',callId:'not-sent',args:{}})",h.ctx);assert.equal(h.sent.at(-1).outcome,'not_executed');
+ await vm.runInContext("cindy.node.request=async()=>({ok:true,result:{id:'saved'}});",h.ctx);
+ await vm.runInContext("runTool({tool:'cortex_remember',callId:'saved',args:{content:'canary',locator:'test'}})",h.ctx);assert.equal(h.sent.at(-1).result.outcome,'executed');
 });
