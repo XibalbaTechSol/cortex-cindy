@@ -14,7 +14,7 @@ function settingsLock(action){
  if(!globalThis.navigator?.locks?.request)throw new Error('Safe settings coordination is unavailable. Update Cindy before changing settings or hosted credentials.');
  return navigator.locks.request('cortex-settings-v1',{mode:'exclusive'},action);
 }
-async function saveSettings(cfg,secretAction){
+async function saveSettings(cfg,secretAction,secretValue=''){
  const expectedRevision=revision;
  return settingsLock(async()=>{
   const latest={...defaults,...await(await request('/kv')).json()};
@@ -28,7 +28,7 @@ async function saveSettings(cfg,secretAction){
    await request('/kv',{method:'PUT',body:JSON.stringify({...latest,settingsRevision:nextRevision,credentialPending:true})});revision=nextRevision;
    try{
     if(secretAction==='delete')await request('/secrets/cortex_token',{method:'DELETE'});
-    else await request('/secrets/cortex_token',{method:'PUT',body:JSON.stringify({value:$('token').value})});
+    else await request('/secrets/cortex_token',{method:'PUT',body:JSON.stringify({value:secretValue})});
    }catch{throw new Error('Credential update was not confirmed. Hosted calls are paused; reload settings and explicitly save or remove the token.');}
    finally{$('token').value='';}
    nextRevision++;
@@ -46,11 +46,12 @@ async function secretState(){const data=await(await request('/secrets')).json();
 async function load(){const cfg={...defaults,...await(await request('/kv')).json()};revision=Number.isSafeInteger(cfg.settingsRevision)?cfg.settingsRevision:0;fields.forEach(k=>$(k).value=cfg[k]);$('recording').checked=cfg.recording;$('historyCapture').checked=cfg.historyCapture;$('archiveFiles').checked=cfg.archiveFiles;$('captureActivity').checked=cfg.captureActivity;mode();await secretState();await request('/wake');channel.postMessage({type:'status-request'});}
 $('mode').onchange=mode;
 $('settings').onsubmit=async e=>{e.preventDefault();if(saving)return;setSaving(true);try{const cfg={};fields.forEach(k=>cfg[k]=$(k).value.trim());cfg.recording=$('recording').checked;cfg.historyCapture=$('historyCapture').checked;cfg.archiveFiles=$('archiveFiles').checked;cfg.captureActivity=$('captureActivity').checked;
+  const secretValue=$('token').value;
   if((cfg.archiveFiles||cfg.captureActivity)&&!cfg.historyCapture)throw new Error('File snapshots and activity metadata require history capture.');
   if(cfg.historyCapture&&(cfg.mode!=='local'||!cfg.historyDatabase.startsWith('/')||!cfg.recording))throw new Error('History capture requires local Cortex, an absolute database path, and recording enabled.');
   if(cfg.mode==='hosted'){const u=new URL(cfg.endpoint);if(u.protocol!=='https:'||u.username||u.password||u.search||u.hash)throw new Error('Use an HTTPS MCP URL without credentials, query parameters, or fragments.');}
   else if(!cfg.executable.startsWith('/')||!cfg.home.startsWith('/'))throw new Error('Use absolute executable and profile paths.');
-  await request('/wake');await saveSettings(cfg,$('token').value?'put':null);await secretState();message(cfg.recording?'Saved. Recording is enabled.':'Saved. Recording is paused.');
+  await request('/wake');await saveSettings(cfg,secretValue?'put':null,secretValue);await secretState();message(cfg.recording?'Saved. Recording is enabled.':'Saved. Recording is paused.');
 }catch(e){message(e.message);}finally{setSaving(false);}};
 $('clear-token').onclick=async()=>{if(saving)return;setSaving(true);try{await saveSettings(null,'delete');await secretState();message('Saved token removed.');}catch(e){message(e.message);}finally{setSaving(false);}};
 let testTimer;

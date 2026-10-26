@@ -4,7 +4,7 @@
 
 **Persistent memory and verifiable capture of the activity Cindy retains.**
 
-**Plugin:** `xibalba-cortex` · **Version:** `0.3.6` · **Minimum Cindy:** `0.1.115` · **Status:** local integration pilot
+**Plugin:** `xibalba-cortex` · **Version:** `0.3.7` · **Minimum Cindy:** `0.1.115` · **Status:** local integration pilot
 
 Cortex for Cindy connects [Cindy](https://github.com/makecindy/cindy) to the [Xibalba Cortex](https://github.com/XibalbaTechSol/xibalba-cortex) memory backend. It provides tools for remembering, recalling, inspecting provenance, and verifying memory history. Optional recording archives saved conversations, tool calls and results, questions, plans, and background-session messages into a dedicated local Cortex profile.
 
@@ -12,7 +12,7 @@ Optional file snapshots preserve supported attachments and task artifact referen
 
 The plugin is an integration with an existing Cortex installation. It does not install the Python backend, replace Cindy's built-in memory system, or expose private model reasoning.
 
-**[Download the installable package](dist/xibalba-cortex-0.3.6.cindy)** · **[Checksums](dist/SHA256SUMS)** · **[Backend installation](https://github.com/XibalbaTechSol/xibalba-cortex#quick-start)** · **[Report an issue](https://github.com/XibalbaTechSol/cortex-cindy/issues)**
+**[Download the installable package](dist/xibalba-cortex-0.3.7.cindy)** · **[Checksums](dist/SHA256SUMS)** · **[Backend installation](https://github.com/XibalbaTechSol/xibalba-cortex#quick-start)** · **[Report an issue](https://github.com/XibalbaTechSol/cortex-cindy/issues)**
 
 ## Contents
 
@@ -71,11 +71,11 @@ Executable and profile paths start empty. **Set your own absolute paths after in
 
 ## Installation
 
-1. Download [`xibalba-cortex-0.3.6.cindy`](dist/xibalba-cortex-0.3.6.cindy). On GitHub's file page, download the raw file rather than saving the rendered page.
+1. Download [`xibalba-cortex-0.3.7.cindy`](dist/xibalba-cortex-0.3.7.cindy). On GitHub's file page, download the raw file rather than saving the rendered page.
 2. Optionally verify it against [`SHA256SUMS`](dist/SHA256SUMS):
 
    ```bash
-   sha256sum xibalba-cortex-0.3.6.cindy
+   sha256sum xibalba-cortex-0.3.7.cindy
    ```
 
 3. Open Cindy's **Plugins** settings and import the `.cindy` file.
@@ -508,6 +508,7 @@ Marketplace distribution requires its own submission/signing/review process and 
 | `0.3.0` | File snapshots, activity metadata outbox, whitespace-safe fragments and coverage audit. |
 | `0.3.1` | Recognize Cindy's local `dialogue` workspace kind for artifact eligibility. |
 | `0.3.6` | Keep endpoint/token inputs immutable during queued saves and token removal; block duplicate mutations and restore controls after completion. |
+| `0.3.7` | Keep the submitted endpoint and token paired through the settings lock. |
 | `0.3.5` | Follow-up review fix: shared locking and revision checks before vault writes/removal, coordinated hosted dispatch, and recoverable pending-credential state. |
 | `0.3.4` | Review fixes: descriptor-based file traversal, explicit write outcomes, serialized/versioned settings, preserved snapshot audits, resumable bounded file work and unchanged-file reuse. |
 | `0.3.3` | Public-registry preparation: four catalog languages, author attribution, empty installation paths, and cryptographic activity identifiers. |
