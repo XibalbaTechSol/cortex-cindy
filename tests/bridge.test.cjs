@@ -30,7 +30,7 @@ test('hosted errors do not expose server response bodies or replay writes',async
 function harness(recording=true, storage=new Map()){
  let cfg={mode:'local',recording},callback;const sent=[],requests=[],broadcast=[];
  class Channel{constructor(){this.onmessage=null;Channel.instance=this;}postMessage(x){broadcast.push(x);}}
- const ctx=vm.createContext({crypto:require('node:crypto').webcrypto,localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)},setTimeout(){},BroadcastChannel:Channel,fetch:async(url,options)=>{if(options?.method==='PUT')cfg=JSON.parse(options.body);return {ok:true,json:async()=>({...cfg})};},cindy:{onHostMessage(fn){callback=fn;},send(x){sent.push(x);},node:{async request(r){requests.push(r);return {ok:true,result:{content:[]}};}}},console:{warn(){},log(){},error(){}}});
+ const ctx=vm.createContext({navigator:{locks:{request:(name,options,action)=>Promise.resolve().then(action)}},crypto:require('node:crypto').webcrypto,localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)},setTimeout(){},BroadcastChannel:Channel,fetch:async(url,options)=>{if(options?.method==='PUT')cfg=JSON.parse(options.body);return {ok:true,json:async()=>({...cfg})};},cindy:{onHostMessage(fn){callback=fn;},send(x){sent.push(x);},node:{async request(r){requests.push(r);return {ok:true,result:{content:[]}};}}},console:{warn(){},log(){},error(){}}});
  vm.runInContext(fs.readFileSync(path.join(__dirname,'../main.js'),'utf8'),ctx);
  let i=0;return {ctx,sent,requests,broadcast,storage,raw:msg=>callback(msg),emit(name,text,sessionId='s'){callback({type:'event',name,hookId:'h'+(++i),data:{sessionId,text}});},async drain(){await vm.runInContext('eventQueue',ctx);},change(next){cfg={...cfg,...next};Channel.instance.onmessage({data:{type:'settings-changed'}});}};
 }
@@ -185,4 +185,21 @@ test('remember tool reports unknown worker failures and known pre-dispatch failu
  await vm.runInContext("runTool({tool:'cortex_remember',callId:'not-sent',args:{}})",h.ctx);assert.equal(h.sent.at(-1).outcome,'not_executed');
  await vm.runInContext("cindy.node.request=async()=>({ok:true,result:{id:'saved'}});",h.ctx);
  await vm.runInContext("runTool({tool:'cortex_remember',callId:'saved',args:{content:'canary',locator:'test'}})",h.ctx);assert.equal(h.sent.at(-1).result.outcome,'executed');
+});
+
+test('hosted calls wait for the credential lock and reject stale endpoint snapshots',async()=>{
+ const h=harness(false);h.change({mode:'hosted',endpoint:'https://old.example.test/mcp'});
+ await vm.runInContext('globalThis.releaseLock=null;navigator.locks.request=(name,options,action)=>new Promise(resolve=>{releaseLock=()=>resolve(action());})',h.ctx);
+ const pending=vm.runInContext("call({mode:'hosted',endpoint:'https://old.example.test/mcp'},'memory_remember',{})",h.ctx);
+ h.change({endpoint:'https://new.example.test/mcp',settingsRevision:1});h.ctx.releaseLock();
+ await assert.rejects(pending,error=>error.outcome==='not_executed');assert.equal(h.requests.length,0);
+});
+test('an unconfirmed credential change blocks hosted calls before worker dispatch',async()=>{
+ const h=harness(false);h.change({mode:'hosted',endpoint:'https://example.test/mcp',credentialPending:true});
+ await assert.rejects(vm.runInContext("call({mode:'hosted',endpoint:'https://example.test/mcp'},'memory_remember',{})",h.ctx),error=>error.outcome==='not_executed');assert.equal(h.requests.length,0);
+});
+test('unavailable shared coordination fails closed without preventing local memory reads',async()=>{
+ const h=harness(false);await vm.runInContext('navigator.locks=undefined',h.ctx);
+ await vm.runInContext("runTool({tool:'cortex_configure_local',callId:'config',args:{executable:'/opt/cortex',home:'/profiles/main'}})",h.ctx);assert.equal(h.sent.at(-1).ok,false);assert.match(h.sent.at(-1).message,/Update Cindy/);
+ await vm.runInContext("runTool({tool:'cortex_status',callId:'status',args:{}})",h.ctx);assert.equal(h.sent.at(-1).ok,true);
 });

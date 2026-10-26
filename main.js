@@ -70,40 +70,35 @@ async function flushActivity(cfg,callId){
 
 
 async function config(){const r=await fetch('/kv');if(!r.ok)throw new Error('Cannot read settings. Reopen the plugin settings and retry.');return {...defaults,...await r.json()};}
-// All plugin-owned KV mutations pass through this resident writer. Network
-// validation stays outside the queue, so a recording pause is never held up by it.
+// Settings pages and resident configuration tools share the same origin-wide lock.
+// Local connection validation remains outside the settings critical section.
 let settingsWrites=Promise.resolve();
-const SETTINGS_FIELDS=['mode','executable','home','agentId','endpoint','historyDatabase','recording','historyCapture','archiveFiles','captureActivity'];
+function settingsLock(action){
+  if(!globalThis.navigator?.locks?.request)throw new Error('Safe settings coordination is unavailable. Update Cindy before changing settings or hosted credentials.');
+  return navigator.locks.request('cortex-settings-v1',{mode:'exclusive'},action);
+}
 function settingsRevision(cfg){return Number.isSafeInteger(cfg.settingsRevision)?cfg.settingsRevision:0;}
 function updateConfig(patch,{expectedRevision,guard}={}){
-  const operation=settingsWrites.then(async()=>{
+  const operation=settingsWrites.then(()=>settingsLock(async()=>{
     const latest=await config();
+    if(latest.credentialPending)throw new Error('Finish the pending credential update in settings by explicitly saving or removing the hosted token.');
     if(expectedRevision!==undefined&&expectedRevision!==settingsRevision(latest))throw new Error('Settings changed in another window or tool. Reload settings before saving again.');
     if(guard)guard(latest);
     const next={...latest,...patch,settingsRevision:settingsRevision(latest)+1};
     const saved=await fetch('/kv',{method:'PUT',body:JSON.stringify(next)});
     if(!saved.ok)throw new Error('Settings save was not confirmed. Reload settings and check the recording state.');
     resetPending('settings_changed');publish();return next;
-  });
+  }));
   settingsWrites=operation.catch(()=>{});return operation;
 }
 function sameDestination(left,right){return ['mode','executable','home','agentId','historyDatabase'].every(key=>left[key]===right[key]);}
-function validateSettings(patch){
-  if(!patch||SETTINGS_FIELDS.some(k=>typeof patch[k]!==(['recording','historyCapture','archiveFiles','captureActivity'].includes(k)?'boolean':'string')))throw new Error('Invalid settings. Reload the settings page.');
-  if((patch.archiveFiles||patch.captureActivity)&&!patch.historyCapture)throw new Error('File snapshots and activity metadata require history capture.');
-  if(patch.historyCapture&&(patch.mode!=='local'||!patch.historyDatabase.startsWith('/')||!patch.recording))throw new Error('History capture requires local Cortex, an absolute database path, and recording enabled.');
-  if(patch.mode==='hosted'){
-    let url;try{url=new URL(patch.endpoint);}catch{throw new Error('Use a valid HTTPS MCP endpoint.');}
-    if(url.protocol!=='https:'||url.username||url.password||url.search||url.hash)throw new Error('Use an HTTPS MCP URL without credentials, query parameters, or fragments.');
-  }else if(patch.mode!=='local'||!patch.executable.startsWith('/')||!patch.home.startsWith('/'))throw new Error('Use absolute executable and profile paths.');
-}
 function publish(){channel.postMessage({type:'status',...state});}
 function toolWriteError(outcome){
   const safe=['not_executed','executed','unknown'].includes(outcome)?outcome:'unknown';
   const error=new Error(safe==='not_executed'?'Memory write was not sent. Check connection settings, credentials and tool arguments.':safe==='executed'?'Memory write completed. Check Cortex for its result; do not repeat the write.':'Memory write outcome is unknown. Check Cortex for the saved memory before retrying; do not replay this write automatically.');
   error.outcome=safe;return error;
 }
-async function call(cfg,name,args,callId){
+async function callUnlocked(cfg,name,args,callId){
   try{
     const r=await cindy.node.request({method:cfg.mode==='hosted'?'hosted/call':'local/call',params:{config:cfg,name,args},timeoutMs:35000,...(callId?{callId,cancelWithCall:true}:{})});
     if(!r.ok){
@@ -116,18 +111,19 @@ async function call(cfg,name,args,callId){
     return r.result;
   }catch(error){if(name==='memory_remember')throw toolWriteError(error.outcome||'unknown');throw error;}
 }
+async function call(cfg,name,args,callId){
+  if(cfg.mode!=='hosted')return callUnlocked(cfg,name,args,callId);
+  // Bind endpoint selection and Host secret injection to one settings snapshot.
+  // Credential changes wait for an already dispatched hosted request to settle.
+  let dispatched=false;
+  try{return await settingsLock(async()=>{
+    const latest=await config();
+    if(latest.credentialPending)throw new Error('Hosted calls are paused until the pending credential update is completed in settings.');
+    if(latest.mode!==cfg.mode||latest.endpoint!==cfg.endpoint||settingsRevision(latest)!==settingsRevision(cfg))throw new Error('Connection settings changed. Check the saved endpoint before running this tool again.');
+    dispatched=true;return callUnlocked(cfg,name,args,callId);
+  });}catch(error){if(name==='memory_remember'&&!dispatched)throw toolWriteError('not_executed');throw error;}
+}
 channel.onmessage=async e=>{
-  if(e.data?.type==='save-settings'){
-    const message=e.data;
-    try{
-      validateSettings(message.config);
-      if(!Number.isSafeInteger(message.expectedRevision))throw new Error('Reload settings before saving again.');
-      const patch=Object.fromEntries(SETTINGS_FIELDS.map(k=>[k,message.config[k]]));
-      const saved=await updateConfig(patch,{expectedRevision:message.expectedRevision});
-      channel.postMessage({type:'settings-result',id:message.id,ok:true,revision:settingsRevision(saved)});
-    }catch(error){channel.postMessage({type:'settings-result',id:message.id,ok:false,message:error.message});}
-    return;
-  }
   if(e.data?.type==='settings-changed'){resetPending('settings_changed');state.lastResult='Settings saved. Pending captures cleared.';publish();}
   if(e.data?.type==='status-request')publish();
   if(e.data?.type==='test-connection'){try{const result=await call(await config(),'memory_status',{});state.lastResult='Connected. Cortex memory_status succeeded.';channel.postMessage({type:'connection-result',ok:true});}catch(e){state.lastResult=e.message;channel.postMessage({type:'connection-result',ok:false,message:e.message});}publish();}

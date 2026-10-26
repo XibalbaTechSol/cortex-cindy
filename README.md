@@ -4,7 +4,7 @@
 
 **Persistent memory and verifiable capture of the activity Cindy retains.**
 
-**Plugin:** `xibalba-cortex` · **Version:** `0.3.4` · **Minimum Cindy:** `0.1.115` · **Status:** local integration pilot
+**Plugin:** `xibalba-cortex` · **Version:** `0.3.5` · **Minimum Cindy:** `0.1.115` · **Status:** local integration pilot
 
 Cortex for Cindy connects [Cindy](https://github.com/makecindy/cindy) to the [Xibalba Cortex](https://github.com/XibalbaTechSol/xibalba-cortex) memory backend. It provides tools for remembering, recalling, inspecting provenance, and verifying memory history. Optional recording archives saved conversations, tool calls and results, questions, plans, and background-session messages into a dedicated local Cortex profile.
 
@@ -12,7 +12,7 @@ Optional file snapshots preserve supported attachments and task artifact referen
 
 The plugin is an integration with an existing Cortex installation. It does not install the Python backend, replace Cindy's built-in memory system, or expose private model reasoning.
 
-**[Download the installable package](dist/xibalba-cortex-0.3.4.cindy)** · **[Checksums](dist/SHA256SUMS)** · **[Backend installation](https://github.com/XibalbaTechSol/xibalba-cortex#quick-start)** · **[Report an issue](https://github.com/XibalbaTechSol/cortex-cindy/issues)**
+**[Download the installable package](dist/xibalba-cortex-0.3.5.cindy)** · **[Checksums](dist/SHA256SUMS)** · **[Backend installation](https://github.com/XibalbaTechSol/xibalba-cortex#quick-start)** · **[Report an issue](https://github.com/XibalbaTechSol/cortex-cindy/issues)**
 
 ## Contents
 
@@ -71,11 +71,11 @@ Executable and profile paths start empty. **Set your own absolute paths after in
 
 ## Installation
 
-1. Download [`xibalba-cortex-0.3.4.cindy`](dist/xibalba-cortex-0.3.4.cindy). On GitHub's file page, download the raw file rather than saving the rendered page.
+1. Download [`xibalba-cortex-0.3.5.cindy`](dist/xibalba-cortex-0.3.5.cindy). On GitHub's file page, download the raw file rather than saving the rendered page.
 2. Optionally verify it against [`SHA256SUMS`](dist/SHA256SUMS):
 
    ```bash
-   sha256sum xibalba-cortex-0.3.4.cindy
+   sha256sum xibalba-cortex-0.3.5.cindy
    ```
 
 3. Open Cindy's **Plugins** settings and import the `.cindy` file.
@@ -412,7 +412,11 @@ Kinds such as `reset`, `skip`, `error`, and `lifecycle` describe different event
 
 Explicit `cortex_remember` failures distinguish `not_executed`, `executed`, and `unknown`. A timeout, connection loss, malformed reply, server error, or lost worker result after dispatch can hide a completed write. For `unknown`, inspect Cortex before deciding whether another save is needed; the plugin does not replay the write automatically. A confirmed success reports `executed`. These outcomes also survive the worker JSON-RPC error boundary.
 
-The resident plugin serializes all plugin-owned settings writes. Configuration tools merge only their intended fields into current settings after connection validation; a recording pause remains in effect. Settings pages send a versioned save request to that writer. An older page receives a reload instruction instead of overwriting newer settings. A settings-save timeout means confirmation was lost: reload and inspect the current recording state.
+Settings pages and resident configuration tools share an origin-wide Web Lock (`cortex-settings-v1`). A page reads and checks its expected settings revision inside that lock **before** changing a token. Token replacement/removal and the final configuration save remain in the same critical section. Outdated pages receive a reload instruction without modifying the working token. Plaintext tokens stay on the settings page's write-only `/secrets` channel; they never enter KV, BroadcastChannel messages, or tool arguments.
+
+Hosted calls use the same lock through endpoint validation and Host credential injection, so they cannot cross a credential rotation. An already dispatched hosted call must settle before a waiting settings change can commit. Local connection validation remains outside the settings critical section; its final field merge preserves a concurrent recording pause.
+
+Credential changes first persist a boolean `credentialPending` marker. If a vault request or final settings save loses confirmation, hosted calls remain blocked instead of using an uncertain endpoint/token pair. Reload settings, review the desired endpoint, then explicitly save or remove the token to finish recovery. Removing a token also advances the revision and is rejected from stale windows. If Web Locks are unavailable, coordinated settings changes and hosted calls fail closed with an upgrade prompt; existing local memory reads remain available. The exact package still requires Cindy client verification; browser regression evidence is not a device-acceptance claim.
 
 ## Updates, pause, and removal
 
@@ -501,6 +505,7 @@ Marketplace distribution requires its own submission/signing/review process and 
 | `0.2.1` | Retained skip/reset diagnostics and backend-independent log access. |
 | `0.3.0` | File snapshots, activity metadata outbox, whitespace-safe fragments and coverage audit. |
 | `0.3.1` | Recognize Cindy's local `dialogue` workspace kind for artifact eligibility. |
+| `0.3.5` | Follow-up review fix: shared locking and revision checks before vault writes/removal, coordinated hosted dispatch, and recoverable pending-credential state. |
 | `0.3.4` | Review fixes: descriptor-based file traversal, explicit write outcomes, serialized/versioned settings, preserved snapshot audits, resumable bounded file work and unchanged-file reuse. |
 | `0.3.3` | Public-registry preparation: four catalog languages, author attribution, empty installation paths, and cryptographic activity identifiers. |
 | `0.3.2` | Sharper 1254×1254 square Cortex icon, encoded below Cindy's icon size limit. |

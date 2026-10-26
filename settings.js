@@ -2,12 +2,34 @@
 const $=id=>document.getElementById(id),channel=new BroadcastChannel('cortex-cindy');
 const defaults={mode:'local',executable:'',home:'',agentId:'',endpoint:'',recording:false,historyCapture:false,historyDatabase:'',archiveFiles:false,captureActivity:false};
 let revision=0;
-const saves=new Map();
-function saveSettings(cfg){
- const id=Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');
- return new Promise((resolve,reject)=>{
-  const timer=setTimeout(()=>{saves.delete(id);reject(new Error('Settings save was not confirmed. Reload settings and check the recording state.'));},10000);
-  saves.set(id,{resolve,reject,timer});channel.postMessage({type:'save-settings',id,config:cfg,expectedRevision:revision});
+// This is the same origin-scoped lock used by the resident configuration tools
+// and hosted calls. Secrets never travel through BroadcastChannel, KV, or tools.
+function settingsLock(action){
+ if(!globalThis.navigator?.locks?.request)throw new Error('Safe settings coordination is unavailable. Update Cindy before changing settings or hosted credentials.');
+ return navigator.locks.request('cortex-settings-v1',{mode:'exclusive'},action);
+}
+async function saveSettings(cfg,secretAction){
+ const expectedRevision=revision;
+ return settingsLock(async()=>{
+  const latest={...defaults,...await(await request('/kv')).json()};
+  const currentRevision=Number.isSafeInteger(latest.settingsRevision)?latest.settingsRevision:0;
+  if(currentRevision!==expectedRevision)throw new Error('Settings changed in another window or tool. Reload settings before saving again.');
+  if(latest.credentialPending&&!secretAction)throw new Error('Finish the pending credential update by explicitly saving or removing the hosted token.');
+  let nextRevision=currentRevision+1;
+  if(secretAction){
+   // A durable marker prevents the old endpoint being used with a new token if
+   // the credential request or final configuration save loses its confirmation.
+   await request('/kv',{method:'PUT',body:JSON.stringify({...latest,settingsRevision:nextRevision,credentialPending:true})});revision=nextRevision;
+   try{
+    if(secretAction==='delete')await request('/secrets/cortex_token',{method:'DELETE'});
+    else await request('/secrets/cortex_token',{method:'PUT',body:JSON.stringify({value:$('token').value})});
+   }catch{throw new Error('Credential update was not confirmed. Hosted calls are paused; reload settings and explicitly save or remove the token.');}
+   finally{$('token').value='';}
+   nextRevision++;
+  }
+  const next={...latest,...(cfg||{}),settingsRevision:nextRevision,credentialPending:false};
+  try{await request('/kv',{method:'PUT',body:JSON.stringify(next)});}catch{throw new Error('Settings save was not confirmed. Reload settings and check the connection and recording state.');}
+  revision=nextRevision;channel.postMessage({type:'settings-changed'});
  });
 }
 const fields=['mode','executable','home','agentId','endpoint','historyDatabase'];
@@ -22,11 +44,10 @@ $('settings').onsubmit=async e=>{e.preventDefault();try{const cfg={};fields.forE
   if(cfg.historyCapture&&(cfg.mode!=='local'||!cfg.historyDatabase.startsWith('/')||!cfg.recording))throw new Error('History capture requires local Cortex, an absolute database path, and recording enabled.');
   if(cfg.mode==='hosted'){const u=new URL(cfg.endpoint);if(u.protocol!=='https:'||u.username||u.password||u.search||u.hash)throw new Error('Use an HTTPS MCP URL without credentials, query parameters, or fragments.');}
   else if(!cfg.executable.startsWith('/')||!cfg.home.startsWith('/'))throw new Error('Use absolute executable and profile paths.');
-  if($('token').value){await request('/secrets/cortex_token',{method:'PUT',body:JSON.stringify({value:$('token').value})});$('token').value='';}
-  await request('/wake');await saveSettings(cfg);await secretState();message(cfg.recording?'Saved. Recording is enabled.':'Saved. Recording is paused.');
+  await request('/wake');await saveSettings(cfg,$('token').value?'put':null);await secretState();message(cfg.recording?'Saved. Recording is enabled.':'Saved. Recording is paused.');
 }catch(e){message(e.message);}};
-$('clear-token').onclick=async()=>{try{await request('/secrets/cortex_token',{method:'DELETE'});$('token').value='';await secretState();message('Saved token removed.');}catch(e){message(e.message);}};
+$('clear-token').onclick=async()=>{try{await saveSettings(null,'delete');await secretState();message('Saved token removed.');}catch(e){message(e.message);}};
 let testTimer;
 $('test').onclick=async()=>{try{$('test').disabled=true;message('Checking saved connection…');await request('/wake');channel.postMessage({type:'test-connection'});testTimer=setTimeout(()=>{$('test').disabled=false;message('Connection check timed out. Check the saved settings and retry.');},40000);}catch(e){$('test').disabled=false;message(e.message);}};
-channel.onmessage=e=>{const d=e.data;if(d.type==='settings-result'){const pending=saves.get(d.id);if(!pending)return;clearTimeout(pending.timer);saves.delete(d.id);if(d.ok){revision=d.revision;pending.resolve();}else pending.reject(new Error(d.message));}if(d.type==='connection-result'){clearTimeout(testTimer);$('test').disabled=false;message(d.ok?'Connected: Cortex memory_status succeeded.':d.message);}if(d.type==='status')$('status').textContent=`This run: ${d.recorded} recorded · ${d.skipped} skipped · ${d.failed} failed. ${d.lastResult}`;};
+channel.onmessage=e=>{const d=e.data;if(d.type==='connection-result'){clearTimeout(testTimer);$('test').disabled=false;message(d.ok?'Connected: Cortex memory_status succeeded.':d.message);}if(d.type==='status')$('status').textContent=`This run: ${d.recorded} recorded · ${d.skipped} skipped · ${d.failed} failed. ${d.lastResult}`;};
 load().catch(e=>message(e.message));
